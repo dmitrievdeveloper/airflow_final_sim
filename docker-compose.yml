@@ -1,0 +1,100 @@
+version: '3.8'
+
+
+services:
+  postgres:
+    image: postgres:14
+    container_name: postgres_db
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow_db
+    ports:
+      - "5435:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+  minio:
+    image: minio/minio
+    container_name: minio_server
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9005:9000"
+      - "9006:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  airflow-webserver:
+    image: apache/airflow:2.8.4
+    container_name: airflow_webserver
+    depends_on:
+      - postgres
+      - minio
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow_db
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__WEBSERVER__SECRET_KEY: your-secret-key
+      # Соединения Airflow 
+      AIRFLOW_CONN_POSTGRES_DEFAULT: '{"conn_type":"postgres","host":"postgres","login":"airflow","password":"airflow","port":5432,"schema":"analytics_db"}'
+      AIRFLOW_CONN_MINIO_CONN: '{"conn_type":"s3","host":"minio","login":"minioadmin","password":"minioadmin","port":9000,"extra":{"endpoint_url":"http://minio:9000","region_name":"us-east-1"}}'
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./requirements.txt:/requirements.txt
+      - ./logs:/opt/airflow/logs
+    ports:
+      - "8095:8080"
+    command: >
+      bash -c "
+        pip install -r /requirements.txt &&
+        airflow db init &&
+        airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin123 &&
+        airflow webserver"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+
+  airflow-scheduler:
+    image: apache/airflow:2.8.4
+    container_name: airflow_scheduler
+    hostname: airflow-scheduler
+    depends_on:
+      - airflow-webserver
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow_db
+      AIRFLOW__WEBSERVER__SECRET_KEY: your-secret-key
+      AIRFLOW_CONN_POSTGRES_DEFAULT: '{"conn_type":"postgres","host":"postgres","login":"airflow","password":"airflow","port":5432,"schema":"analytics_db"}'
+      AIRFLOW_CONN_MINIO_CONN: '{"conn_type":"s3","host":"minio","login":"minioadmin","password":"minioadmin","port":9000,"extra":{"endpoint_url":"http://minio:9000","region_name":"us-east-1"}}'
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./requirements.txt:/requirements.txt
+      - ./logs:/opt/airflow/logs
+    command: >
+      bash -c "
+        pip install -r /requirements.txt &&
+        airflow scheduler"
+    restart: on-failure
+
+
+volumes:
+  postgres_data:
+  minio_data:

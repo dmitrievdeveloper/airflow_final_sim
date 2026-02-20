@@ -1,0 +1,2 @@
+pandas==2.0.3
+apache-airflow-providers-amazon==8.16.0
